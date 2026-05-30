@@ -338,11 +338,44 @@ class TransactionRepository @Inject constructor(
         transactionId: String? = null,
         action: String
     ) {
-        val inputData = workDataOf(
-            "id" to (transactionId ?: transaction?.id?.value.toString()),
-            "action" to action
-            // Note: Add extra fields like amount, category, date here based on the localized Transaction domain model if needed. 
+        // Prepare the worker data bundle dynamically
+        val dataBuilder = mutableMapOf<String, Any>(
+            "action" to action,
+            "id" to (transactionId ?: transaction?.id?.value?.toString() ?: "")
         )
+
+        // Extract transaction properties if a data record exists (For CREATE/UPDATE actions)
+        if (transaction != null) {
+            dataBuilder["date"] = transaction.dateTime.toString()
+            dataBuilder["description"] = transaction.description ?: ""
+
+            // Cast polymorphic interfaces to retrieve functional primitives
+            val numericAmount = when (transaction) {
+                is Expense -> transaction.amount.value
+                is Income -> transaction.amount.value
+                is Transfer -> transaction.amount.value
+                else -> 0L
+            }
+            dataBuilder["amount"] = numericAmount.toDouble() / 100.0 // Handle minor tracking currency allocations
+
+            val categoryStr = when (transaction) {
+                is Expense -> transaction.categoryId.value.toString()
+                is Income -> transaction.categoryId.value.toString()
+                else -> "Transfer"
+            }
+            dataBuilder["category"] = categoryStr
+
+            val typeStr = when (transaction) {
+                is Expense -> "EXPENSE"
+                is Income -> "INCOME"
+                is Transfer -> "TRANSFER"
+                else -> "UNKNOWN"
+            }
+            dataBuilder["type"] = typeStr
+        }
+
+        // Convert the structural map to Android WorkData primitive frames
+        val inputData = workDataOf(*dataBuilder.map { it.key to it.value }.toTypedArray())
 
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)

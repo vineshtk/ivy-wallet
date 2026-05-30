@@ -12,20 +12,20 @@ import kotlinx.serialization.json.put
 class GoogleSheetsSyncWorker(
     appContext: Context,
     workerParams: WorkerParameters,
-    // Note: Use a dependency injection framework like Hilt/Dagger to inject the HttpClient, 
-    // or instantiate/fetch it here depending on Ivy's DI setup.
     private val httpClient: HttpClient 
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result {
         val action = inputData.getString("action") ?: return Result.failure()
-        val transactionId = inputData.getString("id")
+        val transactionId = inputData.getString("id") ?: return Result.failure()
+        
         val date = inputData.getString("date") ?: ""
         val amount = inputData.getDouble("amount", 0.0)
         val category = inputData.getString("category") ?: ""
         val type = inputData.getString("type") ?: ""
         val description = inputData.getString("description") ?: ""
 
+        // Paste your deployed script url token here
         val url = "https://script.google.com/macros/s/AKfycbzsA509JYB7H905Ub47Gww93k_wjRtwh3WBWgMLt7nwkSafHunoRl_u3riNWTFdtjC7iA/exec"
 
         return try {
@@ -43,7 +43,8 @@ class GoogleSheetsSyncWorker(
             }
             Result.success()
         } catch (e: Exception) {
-            // Return retry so WorkManager tries again when network is available
+            e.printStackTrace()
+            // Tell WorkManager to back off and try again when the network recovers
             Result.retry()
         }
     }
