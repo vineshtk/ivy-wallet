@@ -1,5 +1,10 @@
 package com.ivy.data.repository
 
+import androidx.work.Constraints
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
 import com.ivy.base.model.TransactionType
 import com.ivy.base.threading.DispatchersProvider
 import com.ivy.data.db.dao.read.TransactionDao
@@ -17,6 +22,7 @@ import com.ivy.data.model.primitive.AssociationId
 import com.ivy.data.model.primitive.NonNegativeLong
 import com.ivy.data.model.primitive.toNonNegative
 import com.ivy.data.repository.mapper.TransactionMapper
+import com.ivy.wallet.work.GoogleSheetsSyncWorker
 import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -28,7 +34,8 @@ class TransactionRepository @Inject constructor(
     private val transactionDao: TransactionDao,
     private val writeTransactionDao: WriteTransactionDao,
     private val dispatchersProvider: DispatchersProvider,
-    private val tagRepository: TagRepository
+    private val tagRepository: TagRepository,
+    private val workManager: WorkManager
 ) {
     suspend fun findAll(): List<Transaction> = withContext(dispatchersProvider.io) {
         val tagMap = async { findAllTagAssociations() }
@@ -263,6 +270,7 @@ class TransactionRepository @Inject constructor(
                 with(mapper) { value.toEntity() }
             )
         }
+        enqueueGoogleSheetsSync(transaction = value, action = "CREATE_OR_UPDATE")
     }
 
     suspend fun saveMany(value: List<Transaction>) {
@@ -271,12 +279,16 @@ class TransactionRepository @Inject constructor(
                 value.map { with(mapper) { it.toEntity() } }
             )
         }
+        value.forEach {
+            enqueueGoogleSheetsSync(transaction = it, action = "CREATE_OR_UPDATE")
+        }
     }
 
     suspend fun deleteById(id: TransactionId) {
         withContext(dispatchersProvider.io) {
             writeTransactionDao.deleteById(id.value)
         }
+        enqueueGoogleSheetsSync(transactionId = id.value.toString(), action = "DELETE")
     }
 
     suspend fun deleteAllByAccountId(accountId: AccountId) {
@@ -320,6 +332,29 @@ class TransactionRepository @Inject constructor(
             transactionDao.findAllByLoanId(loanId)
         }
     )
+
+    private fun enqueueGoogleSheetsSync(
+        transaction: Transaction? = null,
+        transactionId: String? = null,
+        action: String
+    ) {
+        val inputData = workDataOf(
+            "id" to (transactionId ?: transaction?.id?.value.toString()),
+            "action" to action
+            // Note: Add extra fields like amount, category, date here based on the localized Transaction domain model if needed. 
+        )
+
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        val syncRequest = OneTimeWorkRequestBuilder<GoogleSheetsSyncWorker>()
+            .setInputData(inputData)
+            .setConstraints(constraints)
+            .build()
+
+        workManager.enqueue(syncRequest)
+    }
 
     private suspend fun retrieveTrns(
         dbCall: suspend () -> List<TransactionEntity>,
